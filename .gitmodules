@@ -1,3 +1,9 @@
 [submodule "mongo"]
 	path = mongo
 	url = git@github.com:mongodb/mongo.git
+[submodule "mongo-rocks"]
+	path = mongo-rocks
+	url = git@github.com:Terark/mongo-rocks.git
+[submodule "rocksdb"]
+	path = rocksdb
+	url = git@github.com:Terark/rocksdb.git
