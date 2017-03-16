@@ -3,7 +3,11 @@
 	url = git@github.com:mongodb/mongo.git
 [submodule "mongo-rocks"]
 	path = mongo-rocks
-	url = git@github.com:Terark/mongo-rocks.git
+	url = git@github.com:mongodb-partners/mongo-rocks.git
 [submodule "rocksdb"]
 	path = rocksdb
 	url = git@github.com:Terark/rocksdb.git
+
+[submodule "terark-zip-rocksdb"]
+	path = terark-zip-rocksdb
+	url = git@github.com:terark/terark-zip-rocksdb.git
