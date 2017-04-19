@@ -1,12 +1,12 @@
 [submodule "mongo"]
 	path = mongo
-	url = git@github.com:mongodb/mongo.git
+	url = https://github.com/mongodb/mongo.git
 [submodule "mongo-rocks"]
 	path = mongo-rocks
-	url = git@github.com:mongodb-partners/mongo-rocks.git
+	url = https://github.com/Terark/mongo-rocks.git
 [submodule "rocksdb"]
 	path = rocksdb
-	url = git@github.com:Terark/rocksdb.git
+	url = https://github.com/Terark/rocksdb.git
 [submodule "terark-zip-rocksdb"]
 	path = terark-zip-rocksdb
-	url = git@github.com:terark/terark-zip-rocksdb.git
+	url = https://github.com/Terark/terark-zip-rocksdb.git
