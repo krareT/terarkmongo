@@ -1,60 +1,61 @@
 # mongo on TerarkDB
 
-# �˹�����Щ��
-# rocksdb �Ŀ�
-���� rocksdb �Ŀӣ������� [��ƪ����]() ����һЩ�ܽᡣ
+# 趟过的那些坑
+# rocksdb 的坑
+关于 rocksdb 的坑，我们在 [这篇文章]() 中有一些总结。
 
-# mongo-rocks �Ŀ�
+# mongo-rocks 的坑
 
-# mongodb �����Ŀ�
-# �� initial sync ��ʼ
-������ǵ� mongodb ���������ӣ�master-slave������һ�� slave �ӿտ��ʼ��ʱ��
-����Ҫ�� master �ϵ��������ݡ�ͬ��������������������У�����Ķ�ѹ���ܴ󣬴ӿ��дѹ���ܴ�
-��Ȼ��ˣ�mongo �ٷ� wiredtiger ����� mongo-rocks ���涼�����ò�����
+# mongodb 自身的坑
+# 从 initial sync 开始
+如果我们的 mongodb 设置了主从（master-slave），当一个 slave 从空库初始化时，
+它需要把 master 上的所有数据“同步”过来，在这个过程中，主库的读压力很大，从库的写压力很大，
+虽然如此，mongo 官方 wiredtiger 引擎和 mongo-rocks 引擎都工作得不错。
 
-���ǵ� mongodb ������ 3.7TB �����ݣ�������Ҫ���� 3.7TB �����ݽ��в��ԣ�
-�ٷ��� wiredtiger ����� mongo-rocks �Բ���˵�����Ǳ��������˴����Ĳ��ԡ�
+我们的 mongodb 主库有 3.7TB 的数据，我们需要用这 3.7TB 的数据进行测试，
+官方的 wiredtiger 引擎和 mongo-rocks 自不必说，它们本身经过了大量的测试。
 
-��ʹ�� TerarkDB ������в���ʱ���ܶ�����ͱ�¶�����ˡ���
+当使用 TerarkDB 引擎进行测试时，很多问题就暴露出来了……
 
-���Ƕ�֪����TerarkDB Ĭ��ʹ�õ��� universal compaction��
-�� universal compaction �ڹٷ��� mongo-rocks �и���û���й��κβ��ԡ�
+我们都知道，TerarkDB 默认使用的是 universal compaction，
+而 universal compaction 在官方的 mongo-rocks 中根本没进行过任何测试。
 
-��һ���ӣ��� initial sync �Ĺ����У��������ϵ�д�룬��Ȼ����Ƶ���� compact��
-���ǲ������⣬initial sync ʱ�������Ǹ��� key ����д��ġ�
-��������֪�����������򣨰� key ���򣩵����룬rocksdb �� compact ʵ����ֻ��Ҫ
-�� SST ���ƶ�����Ŀ�� level �ϣ���Ϊ��ͬ SST �� key �������ص���
-���ǣ����������� level compaction ���Ż������� universal compaction��
-��ȫû�����Ƶ��Ż�����
+第一个坑，在 initial sync 的过程中，持续不断的写入，自然会有频繁的 compact，
+我们不难理解，initial sync 时，数据是根据 key 按序写入的。
+并且我们知道，对于有序（按 key 有序）的输入，rocksdb 的 compact 实际上只需要
+把 SST “移动”到目标 level 上，因为不同 SST 的 key 不会有重叠。
+但是，这仅仅是针对 level compaction 的优化，对于 universal compaction，
+完全没有类似的优化……
 
-����ܿ���֣�level0 �� SST �ﵽ��Ŀ�����ˣ�д��ͣ���ˣ������������ǣ������Ѿ���
-level0 SST ��������� 100 ���أ�
-���ԣ��ɴ�ֱ��ȥ�����ж� level0 SST �����ơ��� 
+问题很快出现：level0 的 SST 达到数目上限了，写入停顿了！————可是，我们已经把
+level0 SST 的上限设成 100 了呢！
+所以，干脆直接去掉所有对 level0 SST 的限制…… 
 
-������ܿ죬�ֳ������ˣ��ڴ泬�ޣ�OOM �ˣ�����һ�£�Ϊ�˲����������ڴ��µ�ϵͳ���֣�����ʹ��
-cgroup �Խ��̵��ڴ��������ƣ���Ȼ������ 512G ���ڴ棬�����������ƽ���ֻ��ʹ�� 8G��
-���ã���������� linux �ں˰汾��ʹ�� cgroup ֻ�� anonymous �� mmap �������ƣ�
-���ܶ� shared mmap ���ڴ�������ƣ�Ҳ����˵�����������ϣ�ֻ������ malloc �������ڴ档
-���ԣ�Ҳ����˵����� OOM ����Ϊ malloc ���ڴ�ﵽ�� 8G �����ޣ�������һ�� LOG ���֣�
-rocksdb �ѳ��� 200G �����ݣ���һ�� level0 �� SST ���� compact��
+结果，很快，又出问题了：内存超限，OOM 了！解释一下，为了测试在有限内存下的系统表现，我们使用
+cgroup 对进程的内存做了限制，虽然机器有 512G 的内存，但是我们限制进程只能使用 8G，
+还好，这个机器的 linux 内核版本，使得 cgroup 只能 anonymous 的 mmap 进行限制，
+不能对 shared mmap 的内存进行限制，也就是说，它（基本上）只能限制 malloc 出来的内存。
+所以，也就是说，这个 OOM 是因为 malloc 的内存达到了 8G 的上限！分析了一下 LOG 发现：
+rocksdb 把超过 200G 的数据，往一个 level0 的 SST 进行 compact！
 <table><tr><td>
-TerarkDB ʹ�õ���ȫ��ѹ�������� Index����Ҫ�� һ�� SST ������ Key �����ڴ����ѹ��������ѹ������������Ϊ�ˣ�TerarkDB ��һ��ʼ���ж��ڴ����������ƣ��и� soft limit �� hard limit�������� limit ��Ҫ��Ϊ���ڲ��� compact ʱ������ compact ���ڴ���������Ϊ����TerarkDB SST ������Ҳ��Ϊ�ü����׶Σ�����׶�֮�仹���Դ���һ���̶ȵĲ�����ͬʱ���в�ͬ SST �Ĳ��������ԣ�TerarkDB ��һ�׵��Ȼ��ƣ����ڴ治���޵�ǰ���£������ܹ�ƽ����Ч��ִ�м�������Ϊ�˾����Ŭ��������TerarkDB ���������������������� Index ѹ�������ڴ���������hard limit��TerarkDB option �е����ã���ֻ�Ǵ˿� TerarkDB �о�ֻ������һ����������
+TerarkDB 使用的是全局压缩，对于 Index，需要把 一个 SST 的所有 Key 放入内存进行压缩（创建压缩的索引），为此，TerarkDB 从一开始就有对内存用量的限制，有个 soft limit 和 hard limit，这两个 limit 主要是为了在并发 compact 时，限制 compact 的内存用量，因为单个TerarkDB SST 的生成也分为好几个阶段，多个阶段之间还可以存在一定程度的并发，同时还有不同 SST 的并发，所以，TerarkDB 有一套调度机制，在内存不超限的前提下，尽可能公平、高效地执行计算任务。为了尽最大努力工作，TerarkDB 仍允许单个计算任务（例如 Index 压缩）的内存用量超过hard limit（TerarkDB option 中的设置），只是此刻 TerarkDB 中就只能有这一个计算任务。
 
-Ȼ����SST �վ�����̫�󣬴�������ʱ Index Key ���ܺ����ճ����� cgroup �ڴ����ƣ��������� OOM��
+
+然而，SST 终究还是太大，创建索引时 Index Key 的总和最终超出了 cgroup 内存限制，最终引发 OOM。
 </td></tr></table>
 
-��������� rocksdb ��һ�����⣺*level0 �� level0 �� compact �У�SST �ߴ粻�����ƣ�*
-Ϊ����ʱ����������⣬���ǰ� max_merge_width �ĳ��� 20��ͬʱҲ�� cgroup �ڴ����Ƹĳ�
-�� 64G��ͬʱ���󲢷��߳��������� level0 �ܼ�ʱ compact ���²㡭����Ȼ�����鲢δ�������ǵ�Ը����չ���� OOM �ˣ��۲� LOG ���֣��и��������� 2.8T �� SST ������ͼ����Ȼ��Ȼ��ʧ���ˡ���
+这里就引出 rocksdb 的一个问题：*level0 到 level0 的 compact 中，SST 尺寸不受限制！*
+为了暂时缓解这个问题，我们把 max_merge_width 改成了 20，同时也把 cgroup 内存限制改成
+了 64G，同时增大并发线程数，期望 level0 能及时 compact 到下层……，然而事情并未依照我们的愿望发展，又 OOM 了，观察 LOG 发现，有个输入数据 2.8T 的 SST 创建企图，自然而然地失败了……
 
-���գ����Ƕ� mongo ��������һ���޸ģ��� initial sync ��ʼʱ���رա�*�Զ� compact*����initial sync ����ʱ��ǿ��ִ��һ�� full compact��Ȼ���ٿ����Զ� compact���ָ��������á�
+最终，我们对 mongo 本身做了一个修改，在 initial sync 开始时，关闭“*自动 compact*”，initial sync 结束时，强制执行一个 full compact，然后再开启自动 compact，恢复正常配置。
 
-�˿̣�����ò�����������Ȼ������һ�ֵĺƽٲŸոտ�ʼ����
+此刻，问题貌似完美解决，然而，新一轮的浩劫才刚刚开始……
 
-���Ǻܿ췢�֣���һ�� collection ͬ�����Ժ�mongo ��ʾ���ڴ����������� rocksdb ��ʱ��û���κ���־�����CPU ����Ҳһֱ�ǵ��� 100%�������������ٶȾ�Ȼ�����ݱ�����ͬ������һ����������Ȼ�����Ƿ��֣�mongo ��������ʱ���Ȱ�����ɨ��һ�飬�ڼ�������� Key �������������ɶ�� Sorted Run д���ļ���Ȼ��Զ�� Sorted Run ���ж�·�鲢����·�鲢�Ľ������д��洢���棨���� wiredtiger �� rocksdb����
+我们很快发现，第一个 collection 同步完以后，mongo 显示正在创建索引，但 rocksdb 长时间没有任何日志输出，CPU 负载也一直是单核 100%，索引创建的速度竟然比数据本身的同步慢了一个数量级！然后我们发现，mongo 创建索引时是先把数据扫描一遍，期间把索引的 Key 抽出来，并排序成多个 Sorted Run 写入文件，然后对多个 Sorted Run 进行多路归并，多路归并的结果批量写入存储引擎（例如 wiredtiger 或 rocksdb）。
 
-���˼·��Ȼ������������û��ʹ�������� replace-select-sort �����㷨��������ʵ����Ҳ�����Ż�����������û��覴á����ǣ�*Ϊʲô����ô����*�����Ǻܿ췢�֣�ÿ�� pstack ʱ�������ڶ�ջ�п���`rocksdb::MergingIterator::status()`��ԭ����mongo-rocks iterator ��ÿ�� `next` ������������õ���������������� *�Զ� compact* ʱ��`MergingIterator` û����ô�������·����`MergingIterator`��������ʹ��һ����С�ѣ��Զ�·������ж�·�鲢������ level0 ��ÿ�� SST ��һ·���룬����ÿ�� level ��һ·���룩���������Զ� compact ʱ��`MergingIterator` ������*·��*��������������� case �дﵽ 600 ���ϣ����� SST ���� level0���������ҵ��ˣ��ͺ����׽������ mongo-rocks �в���Ҫ�� `status()` ����ȥ�����ɡ�
+这个思路虽然不完美（例如没有使用著名的 replace-select-sort 外排算法），代码实现上也不够优化，但整体上没有瑕疵。可是，*为什么就这么慢呢*？我们很快发现，每次 pstack 时，经常在堆栈中看到`rocksdb::MergingIterator::status()`，原来，mongo-rocks iterator 的每次 `next` 操作，都会调用到这个函数，在启用 *自动 compact* 时，`MergingIterator` 没有那么大的输入路数（`MergingIterator`本质上是使用一个最小堆，对多路输入进行多路归并，其中 level0 的每个 SST 是一路输入，其他每个 level 是一路输入），而禁用自动 compact 时，`MergingIterator` 的输入*路数*暴增，在我们这个 case 中达到 600 以上（所有 SST 都在 level0）。问题找到了，就很容易解决，把 mongo-rocks 中不必要的 `status()` 调用去掉即可。
 
-Ȼ�����������ɡ�����������ӣ��ֵ�����һ���ӣ��������Ӱ��úܽ������ǣ��ǲ�ͬ�����ڵģ�`status()` ������� mongo-rocks �ڵģ�����µĿӣ��� mongo �ڵģ��� build index �����У�mongo ÿ�� 10 ���룬����ÿ���� 128 �����ݣ������ `yield`����*���浱ǰ״̬*���жϵ�ǰ�������������߳�һ�����ȵĻ��ᣬ`yield` ����֮��*�ָ�״̬*���������У���ô��ȫ�Ĵ�����������ʲô�����أ���ʵ��ǰ���Ǹ���һ����mongo ÿ��*�ָ�״̬*ʱ������� `iterator->Seek`��`MergingIterator` ·�����ٵ�ʱ�����ⲻ��·��һ�࣬��������ر�¶�����ˡ���������޸�Ҳ�ܼ򵥣��� mongo-rocks ������ workaround����� seek �� key �� iterator ��ǰ�� key ��ͬ�������� seek ��ִ�С�
+然而，问题依旧……填了这个坑，又掉进另一个坑，这两个坑挨得很近，但是，是不同的人挖的，`status()` 这个坑是 mongo-rocks 挖的，这个新的坑，是 mongo 挖的：在 build index 过程中，mongo 每隔 10 毫秒，或者每遍历 128 条数据，会进行 `yield`，即*保存当前状态*，中断当前工作，给其他线程一个调度的机会，`yield` 结束之后，*恢复状态*，继续运行！这么周全的处理，能有有什么问题呢？其实跟前面那个坑一样：mongo 每次*恢复状态*时，会调用 `iterator->Seek`，`MergingIterator` 路数很少的时候，问题不大，路数一多，问题就严重暴露出来了。这个问题修复也很简单，在 mongo-rocks 中做个 workaround，如果 seek 的 key 跟 iterator 当前的 key 相同，就跳过 seek 的执行。
 
 
