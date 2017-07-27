@@ -52,7 +52,7 @@ TerarkDB 使用的是全局压缩，对于 Index，需要把 一个 SST 的所�
 
 我们很快发现，第一个 collection 同步完以后，mongo 显示正在创建索引，但 rocksdb 长时间没有任何日志输出，CPU 负载也一直是单核 100%，索引创建的速度竟然比数据本身的同步慢了一个数量级！然后我们发现，mongo 创建索引时是先把数据扫描一遍，期间把索引的 Key 抽出来，并排序成多个 Sorted Run 写入文件，然后对多个 Sorted Run 进行多路归并，多路归并的结果批量写入存储引擎（例如 wiredtiger 或 rocksdb）。
 
-这个思路虽然不完美（例如没有使用著名的 replace-select-sort 外排算法），代码实现上也不够优化，但整体上没有瑕疵。可是，**为什么就这么慢呢**？我们很快发现，每次 pstack 时，经常在堆栈中看到`rocksdb::MergingIterator::status()`，原来，mongo-rocks iterator 的每次 `next` 操作，都会调用到这个函数，在启用 **自动 compact** 时，`MergingIterator` 没有那么大的输入路数（`MergingIterator`本质上是使用一个最小堆，对多路输入进行多路归并，其中 level0 的每个 SST 是一路输入，其他每个 level 是一路输入），而禁用自动 compact 时，`MergingIterator` 的输入**路数**暴增，在我们这个 case 中达到 600 以上（所有 SST 都在 level0）。问题找到了，就很容易解决，把 mongo-rocks 中不必要的 `status()` 调用去掉即可。
+这个思路虽然不完美（例如没有使用著名的 replace-select-sort 外排算法），代码实现上也不够优化，但整体上没有瑕疵。可是，**为什么就这么慢呢**？我们很快发现，每次 pstack 时，经常在堆栈中看到`rocksdb::MergingIterator::status()`，原来，mongo-rocks iterator 的每次 `next` 操作，都会调用到这个函数，在启用 **自动 compact** 时，`MergingIterator` 没有那么大的输入路数（`MergingIterator`本质上是使用一个最小堆，对多路输入进行多路归并，其中 level0 的每个 SST 是一路输入，其他每个 level 是整个 level 作为一路输入），而禁用自动 compact 时，`MergingIterator` 的输入**路数**暴增，在我们这个 case 中达到 600 以上（所有 SST 都在 level0）。问题找到了，就很容易解决，把 mongo-rocks 中不必要的 `status()` 调用去掉即可。
 
 然而，问题依旧……填了这个坑，又掉进另一个坑，这两个坑挨得很近，但是，是不同的人挖的，`status()` 这个坑是 mongo-rocks 挖的，这个新的坑，是 mongo 挖的：在 build index 过程中，mongo 每隔 10 毫秒，或者每遍历 128 条数据，会进行 `yield`，即**保存当前状态**，中断当前工作，给其他线程一个调度的机会，`yield` 结束之后，**恢复状态**，继续运行！这么周全的处理，能有有什么问题呢？其实跟前面那个坑一样：mongo 每次**恢复状态**时，会调用 `iterator->Seek`，`MergingIterator` 路数很少的时候，问题不大，路数一多，问题就严重暴露出来了。这个问题修复也很简单，在 mongo-rocks 中做个 workaround，如果 seek 的 key 跟 iterator 当前的 key 相同，就跳过 seek 的执行。
 
