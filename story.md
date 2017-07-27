@@ -20,8 +20,8 @@
 我们都知道，TerarkDB 默认使用的是 universal compaction，
 而 universal compaction 在官方的 mongo-rocks 中根本没进行过任何测试。
 
-第一个坑，在 initial sync 的过程中，持续不断的写入，自然会有频繁的 compact，
-我们不难理解，initial sync 时，数据是根据 key 按序写入的。
+第一个坑，在 initial sync 的过程中，持续不断的写入，自然会有频繁的 compact。
+我们不难理解，initial sync 时，数据是根据 key 按序写入的，
 并且我们知道，对于有序（按 key 有序）的输入，rocksdb 的 compact 实际上只需要
 把 SST “移动”到目标 level 上，因为不同 SST 的 key 不会有重叠。
 但是，这仅仅是针对 level compaction 的优化，对于 universal compaction，
