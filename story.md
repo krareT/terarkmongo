@@ -2,7 +2,7 @@
 
 # 趟过的那些坑
 # rocksdb 的坑
-关于 rocksdb 的坑，我们在 [这篇文章]() 中有一些总结。
+关于 rocksdb 的坑，我们在 [这篇文章](https://github.com/Terark/terarkdb/wiki/rocksdb-bugfix-by-terark) 中有一些总结。
 
 # mongo-rocks 的坑
 
