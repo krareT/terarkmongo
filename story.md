@@ -33,9 +33,8 @@ level0 SST 的上限设成 100 了呢！
 
 结果，很快，又出问题了：内存超限，OOM 了！解释一下，为了测试在有限内存下的系统表现，我们使用
 cgroup 对进程的内存做了限制，虽然机器有 512G 的内存，但是我们限制进程只能使用 8G，
-还好，这个机器的 linux 内核版本，使得 cgroup 只能 anonymous 的 mmap 进行限制，
-不能对 shared mmap 的内存进行限制，也就是说，它（基本上）只能限制 malloc 出来的内存。
-所以，也就是说，这个 OOM 是因为 malloc 的内存达到了 8G 的上限！分析了一下 LOG 发现：
+关于 cgroup 内存限制对 mmap 的作用，我们也是趟了坑才搞清楚[看这里](https://github.com/Terark/terarkdb/wiki/mmap-%E5%92%8C-cgroup-%E6%B3%A8%E6%84%8F%E4%BA%8B%E9%A1%B9)。
+我们分析 LOG 发现：
 rocksdb 把超过 200G 的数据，往一个 level0 的 SST 进行 compact！
 <table><tr><td>
 TerarkDB 使用的是全局压缩，对于 Index，需要把 一个 SST 的所有 Key 放入内存进行压缩（创建压缩的索引），为此，TerarkDB 从一开始就有对内存用量的限制，有个 soft limit 和 hard limit，这两个 limit 主要是为了在并发 compact 时，限制 compact 的内存用量，因为单个TerarkDB SST 的生成也分为好几个阶段，多个阶段之间还可以存在一定程度的并发，同时还有不同 SST 的并发，所以，TerarkDB 有一套调度机制，在内存不超限的前提下，尽可能公平、高效地执行计算任务。为了尽最大努力工作，TerarkDB 仍允许单个计算任务（例如 Index 压缩）的内存用量超过hard limit（TerarkDB option 中的设置），只是此刻 TerarkDB 中就只能有这一个计算任务。<br/><br/>
