@@ -1,4 +1,4 @@
-# mongo on TerarkDB
+# TerarkMongo
 
 # 趟过的那些坑
 # rocksdb 的坑
